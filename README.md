@@ -1,4 +1,4 @@
-# Rise Mode Temp 6 Linux Driver
+# Rise Mode Temp 6 Linux Driver (Refatorado & Aprimorado)
 
 Driver experimental para Linux do display USB do air cooler **Rise Mode Temp 6 Pro**.
 
@@ -8,132 +8,114 @@ O dispositivo usa um controlador HID da Semico/Ocypus e aparece no Linux como:
 1a2c:4984 SEMICO USB Gaming Keyboard
 ```
 
-O driver atualiza o display com:
+O driver é responsável por enviar as seguintes informações ao display:
 
-- temperatura da CPU, via `psutil`
-- potencia aproximada do pacote CPU em watts, via Intel RAPL quando disponivel
+- Temperatura da CPU (com detecção automática inteligente de sensores)
+- Potência aproximada do pacote CPU em watts, via Intel RAPL, quando disponível
 
-## Status
+---
 
-Testado em Ubuntu com kernel Linux e dispositivo:
+## Melhorias e Novidades desta Versão Refatorada
 
-```text
-VID: 1a2c
-PID: 4984
-Interface HID: 1
-Report ID: 0x07
-```
+1. **Detecção Automática e Inteligente de Sensores (Intel & AMD Ryzen):**
 
-O protocolo foi inferido do software Windows oficial (`DeviceDriver.exe`), que usa `HidD_SetFeature`.
+- O script `rise_temp6.py` identifica automaticamente o sensor de temperatura disponível no sistema (`k10temp`, `zenpower`, `coretemp`, `cpu_thermal`, etc.).
+- Não é mais necessário especificar um sensor fixo no serviço (como `--sensor coretemp`). O script seleciona o correto por conta própria.
+- Suporte nativo a processadores AMD Ryzen e Intel sem dor de cabeça.
 
-## Protocolo HID
+2. **Resiliência e Tratamento de Erros:**
 
-O report enviado tem 64 bytes:
+- Tratamento robusto na busca por substrings e rótulos de sensores para evitar exceções em distribuições Linux variadas.
 
-```text
-byte 0     report ID: 0x07
-bytes 1-3  temperatura em centenas/dezenas/unidades
-byte 4     unidade: 0 = Celsius, 1 = Fahrenheit
-bytes 5-7  potencia em watts em centenas/dezenas/unidades
-bytes 8-63 zero
-```
+3. **Instalador e Regras Udev Robustos (`install.sh` & `99-rise-temp6.rules`):**
 
-Exemplo para `29 C` e `15 W`:
+- Adicionada regra explícita no udev (`ATTR{authorized}="1"`) para evitar que o kernel bloqueie ou deixe portas USB não autorizadas.
+- Feedback visual aprimorado com cores no terminal e validação prévia de dependências.
 
-```text
-07 00 02 09 00 00 01 05 ...
-```
+4. **Otimização do Serviço Systemd (`rise-temp6.service`):**
+
+- Serviço simplificado, sem parâmetros fixos de sensores, permitindo portabilidade total entre diferentes configurações de hardware.
+
+---
 
 ## Requisitos
 
-Ubuntu/Debian:
+No Ubuntu/Debian:
 
 ```bash
 sudo apt install python3 python3-psutil
 ```
 
-Para leitura de potencia, o sistema precisa expor Intel RAPL em:
+## Instalação
 
-```text
-/sys/class/powercap/intel-rapl*
-```
-
-Se RAPL nao estiver disponivel, o driver mostra `0 W`, mas a temperatura continua funcionando.
-
-## Instalacao
-
-Clone o projeto e execute:
+Clone o repositório e execute o instalador como root:
 
 ```bash
 sudo ./install.sh
 ```
 
-O instalador copia:
+O instalador cuida de copiar os arquivos, configurar as regras do udev e habilitar o serviço systemd automaticamente.
 
-- `rise_temp6.py` para `/usr/local/bin/rise_temp6.py`
-- `rise-temp6.service` para `/etc/systemd/system/rise-temp6.service`
-- `99-rise-temp6.rules` para `/etc/udev/rules.d/99-rise-temp6.rules`
+---
 
-Depois habilita e inicia o servico:
+## Uso Manual
 
-```bash
-sudo systemctl enable --now rise-temp6.service
-```
-
-## Uso manual
-
-Listar dispositivos HID:
+Listar dispositivos HID disponíveis:
 
 ```bash
 sudo ./rise_temp6.py list
 ```
 
-Enviar um valor fixo:
+Executar a atualização contínua (com detecção automática de temperatura):
 
 ```bash
-sudo ./rise_temp6.py send --temp 55 --power 42
+sudo ./rise_temp6.py watch --interval 1
 ```
 
-Atualizar continuamente:
+_(Nota: Caso queira testar uma temperatura ou sensor específico manualmente, você ainda pode usar parâmetros opcionais como `--temp 55` ou `--sensor k10temp`)._
+
+---
+
+## Gerenciamento do Serviço
+
+Verificar status:
 
 ```bash
-sudo ./rise_temp6.py watch --sensor coretemp --interval 1
+sudo systemctl status rise-temp6.service
 ```
 
-## Servico
-
-Ver status:
+Ver logs em tempo real:
 
 ```bash
-systemctl status rise-temp6.service
+sudo journalctl -u rise-temp6.service -f
 ```
 
-Ver logs:
-
-```bash
-journalctl -u rise-temp6.service -f
-```
-
-Reiniciar:
+Reiniciar o serviço:
 
 ```bash
 sudo systemctl restart rise-temp6.service
 ```
 
-Parar:
+Parar o serviço:
 
 ```bash
 sudo systemctl stop rise-temp6.service
 ```
 
-## Desinstalacao
+---
+
+## Desinstalação
+
+Para remover completamente o driver e todas as configurações do sistema:
 
 ```bash
 sudo ./uninstall.sh
 ```
 
+---
+
 ## Notas
 
-- O dispositivo se identifica como teclado HID, mas a interface usada pelo display e a interface `1`.
+- O dispositivo se identifica como teclado HID, mas a interface usada pelo display é a interface `1`.
 - O script usa `HidD_SetFeature` equivalente via `ioctl(HIDIOCSFEATURE)` em `/dev/hidraw`.
-- Este projeto nao e oficial da Rise Mode, Semico ou Ocypus.
+- Este projeto não é oficial da Rise Mode, Semico ou Ocypus.

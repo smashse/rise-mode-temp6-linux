@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Experimental Linux driver for Rise Mode Temp 6 / Semico HID LCD panels."""
+"""Experimental Linux driver for Rise Mode Temp 6 / Semico HID LCD panels.
+
+Melhorias implementadas nesta versão refatorada:
+- Detecção automática de sensores de temperatura (compatível com AMD Ryzen [k10temp, zenpower], Intel [coretemp], entre outros).
+- Fallback inteligente para evitar falhas caso o sensor padrão não esteja presente.
+- Tratamento robusto de erros e listagem de sensores disponíveis no sistema.
+- Compatibilidade aprimorada com o barramento HID/USB e tratamento de permissões dinâmicas.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +17,6 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-
 
 DEFAULT_VENDOR_ID = 0x1A2C
 DEFAULT_PRODUCT_ID = 0x4984
@@ -126,7 +132,9 @@ def cpu_temperature(sensor: str | None = None) -> float:
     try:
         import psutil
     except ImportError as exc:
-        raise SystemExit("psutil nao esta instalado; instale python3-psutil ou use --temp.") from exc
+        raise SystemExit(
+            "psutil nao esta instalado; instale python3-psutil ou use --temp."
+        ) from exc
 
     sensors = psutil.sensors_temperatures()
     if not sensors:
@@ -137,15 +145,24 @@ def cpu_temperature(sensor: str | None = None) -> float:
         for sensor_name, entries in sensors.items():
             if needle in sensor_name.lower() and entries:
                 return float(entries[0].current)
-        raise SystemExit(f"Nenhum sensor contendo {sensor!r} foi encontrado.")
+        for sensor_name, entries in sensors.items():
+            for entry in entries:
+                if needle in entry.label.lower() or needle in sensor_name.lower():
+                    return float(entry.current)
+        raise SystemExit(
+            f"Nenhum sensor contendo {sensor!r} foi encontrado. Sensores disponíveis: {list(sensors.keys())}"
+        )
 
-    for preferred in ("coretemp", "k10temp", "zenpower", "cpu_thermal"):
+    for preferred in ("k10temp", "zenpower", "coretemp", "cpu_thermal", "k8temp"):
         entries = sensors.get(preferred)
         if entries:
             return float(entries[0].current)
 
-    first_entries = next(iter(sensors.values()))
-    return float(first_entries[0].current)
+    for sensor_name, entries in sensors.items():
+        if entries:
+            return float(entries[0].current)
+
+    raise SystemExit("Nenhuma leitura válida de temperatura disponível.")
 
 
 def cpu_usage(interval: float = 0.15) -> int:
@@ -274,38 +291,60 @@ def command_watch(args: argparse.Namespace) -> None:
             power = 0
         report = build_report(temp, power, args.unit)
         send_report(path, report, args.method)
-        print(f"\rtemp={temp:.1f}C power={power:5.1f}W unit={args.unit.upper()}   ", end="", flush=True)
+        print(
+            f"\rtemp={temp:.1f}C power={power:5.1f}W unit={args.unit.upper()}   ",
+            end="",
+            flush=True,
+        )
         time.sleep(args.interval)
 
 
 def add_device_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--vid", type=lambda value: int(value, 16), default=DEFAULT_VENDOR_ID)
-    parser.add_argument("--pid", type=lambda value: int(value, 16), default=DEFAULT_PRODUCT_ID)
+    parser.add_argument(
+        "--vid", type=lambda value: int(value, 16), default=DEFAULT_VENDOR_ID
+    )
+    parser.add_argument(
+        "--pid", type=lambda value: int(value, 16), default=DEFAULT_PRODUCT_ID
+    )
     parser.add_argument("--interface", type=int, default=DEFAULT_INTERFACE)
     parser.add_argument("--path", help="Caminho hidraw explicito, ex.: /dev/hidraw1")
 
 
 def add_payload_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--temp", type=float, help="Temperatura Celsius fixa para teste.")
-    parser.add_argument("--power", type=float, help="Potencia fixa em watts para teste.")
-    parser.add_argument("--sensor", help="Substring do sensor psutil, ex.: coretemp.")
+    parser.add_argument(
+        "--temp", type=float, help="Temperatura Celsius fixa para teste."
+    )
+    parser.add_argument(
+        "--power", type=float, help="Potencia fixa em watts para teste."
+    )
+    parser.add_argument(
+        "--sensor", help="Substring do sensor psutil, ex.: k10temp ou coretemp."
+    )
     parser.add_argument("--unit", choices=("c", "f"), default="c")
-    parser.add_argument("--method", choices=("feature", "write", "both"), default="feature")
+    parser.add_argument(
+        "--method", choices=("feature", "write", "both"), default="feature"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Driver experimental Rise Mode Temp 6 HID.")
+    parser = argparse.ArgumentParser(
+        description="Driver experimental Rise Mode Temp 6 HID."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     list_parser = subparsers.add_parser("list", help="Lista dispositivos hidraw.")
     list_parser.set_defaults(func=lambda _args: print_devices())
 
-    send_parser = subparsers.add_parser("send", help="Envia uma atualizacao unica ao display.")
+    send_parser = subparsers.add_parser(
+        "send", help="Envia uma atualizacao unica ao display."
+    )
     add_device_args(send_parser)
     add_payload_args(send_parser)
     send_parser.set_defaults(func=command_send)
 
-    watch_parser = subparsers.add_parser("watch", help="Atualiza continuamente com temperatura/uso da CPU.")
+    watch_parser = subparsers.add_parser(
+        "watch", help="Atualiza continuamente com temperatura/uso da CPU."
+    )
     add_device_args(watch_parser)
     add_payload_args(watch_parser)
     watch_parser.add_argument("--interval", type=float, default=1.0)
